@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Predictive Observability Dashboard</title>
+    <style>
+        :root { 
+            --primary-color: #0d6efd;
+            --secondary-color: #6c757d;
+            --light-gray: #f0f2f5;
+            --medium-gray: #dee2e6;
+            --dark-gray: #343a40;
+            --text-color: #212529;
+            --light-text: #f8f9fa;
+            --white: #ffffff;
+            --orange: #fd7e14;
+            --green: #198754;
+            --red: #dc3545;
+        }
+        body { font-family: system-ui, sans-serif; background-color: var(--white); color: var(--text-color); margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        .banner { background-color: var(--primary-color); color: var(--light-text); padding: 1rem 2rem; font-size: 1.5rem; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .dashboard { display: flex; flex: 1; overflow: hidden; }
+        .control-panel { flex: 0 0 380px; background-color: var(--light-gray); padding: 1.5rem; overflow-y: auto; border-right: 1px solid var(--medium-gray); }
+        .output-panel { flex: 1; display: flex; flex-direction: column; padding: 1.5rem; overflow-y: auto; }
+        .container { background-color: var(--white); padding: 1.5rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 1.5rem; border: 1px solid var(--medium-gray); }
+        h2, h3 { color: var(--dark-gray); border-bottom: 2px solid var(--primary-color); padding-bottom: 0.5rem; margin-top: 0; }
+        button { color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 14px; font-weight: bold; transition: all 0.2s; margin: 5px 0; width: 100%; text-align: left; display: flex; align-items: center; gap: 8px; }
+        button:hover { opacity: 0.85; }
+        .btn-collect { background-color: var(--primary-color); }
+        .btn-train { background-color: var(--orange); }
+        .btn-monitor { background-color: var(--green); }
+        .btn-stop { background-color: var(--red); }
+        .btn-save { background-color: var(--secondary-color); }
+        .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+        .status-item { background-color: #f8f9fa; padding: 1rem; border-radius: 5px; text-align: center; }
+        .status-label { font-size: 0.8em; text-transform: uppercase; color: var(--secondary-color); }
+        .status-value { font-size: 1.2em; font-weight: bold; }
+        .status-indicator { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; vertical-align: middle;}
+        .status-on { background-color: var(--green); }
+        .status-off { background-color: var(--red); }
+        .io-controls, .collection-controls { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+        .io-controls input[type="file"] { flex: 1; font-size: 12px; }
+        .io-controls button { width: auto; flex-shrink: 0;}
+        .collection-controls input, .collection-controls select { flex: 1; padding: 8px; border: 1px solid var(--medium-gray); border-radius: 5px; font-size: 14px; }
+        
+        .tab-nav { display: flex; border-bottom: 2px solid var(--medium-gray); margin-bottom: 1.5rem; }
+        .tab-link {
+            border: 1px solid transparent;
+            border-bottom: none;
+            border-radius: 6px 6px 0 0;
+            padding: 10px 20px;
+            cursor: pointer;
+            background-color: var(--light-gray);
+            color: var(--secondary-color);
+            font-weight: bold;
+            font-size: 1rem;
+            margin-right: 5px;
+            margin-bottom: -2px; 
+            position: relative;
+            top: 2px;
+            width: auto;
+            transition: all 0.2s ease-in-out;
+        }
+        .tab-link:hover { background-color: #e2e6ea; }
+        .tab-link.active {
+            background-color: var(--white);
+            border-color: var(--medium-gray) var(--medium-gray) var(--white);
+            color: var(--primary-color);
+        }
+        .tab-content { flex: 1; display: flex; flex-direction: column;}
+        .tab-pane { display: none; flex: 1; flex-direction: column; }
+        .tab-pane.active { display: flex; }
+        .output-box {
+            flex: 1;
+            background-color: var(--text-color);
+            color: var(--light-text);
+            font-family: 'Courier New', Courier, monospace;
+            padding: 1rem;
+            border-radius: 5px;
+            white-space: pre-wrap;
+            overflow-y: auto;
+            border: 1px solid var(--dark-gray);
+        }
+        .output-box .log-line {
+             border-bottom: 1px solid #495057;
+             padding-bottom: 5px;
+             margin-bottom: 5px;
+        }
+        .placeholder-text { color: var(--secondary-color); font-style: italic; }
+
+        .anomaly-item {
+            border: 1px solid #495057;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            background-color: #343a40;
+        }
+        .anomaly-item summary {
+            padding: 12px;
+            cursor: pointer;
+            outline: none;
+            font-weight: bold;
+            color: var(--light-text);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .anomaly-item summary::-webkit-details-marker {
+            display: none;
+        }
+        .anomaly-item summary:before {
+            content: '▶';
+            font-size: 0.8em;
+            margin-right: 8px;
+            transition: transform 0.2s;
+        }
+        .anomaly-item[open] > summary:before {
+            transform: rotate(90deg);
+        }
+        .anomaly-details {
+            padding: 0 12px 12px 30px;
+            font-size: 0.85em;
+            opacity: 0.9;
+            border-top: 1px solid #495057;
+        }
+        .anomaly-details pre {
+            white-space: pre-wrap; 
+            word-break: break-all;
+        }
+        .summary-text {
+            color: var(--orange);
+            flex-grow: 1;
+            white-space: normal; /* Allow summary text to wrap */
+        }
+        .summary-meta {
+            font-size: 0.8em;
+            color: var(--secondary-color);
+            white-space: nowrap;
+        }
+        .lstm-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 10px;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+        }
+        .control-group label {
+            font-size: 0.8em;
+            color: var(--secondary-color);
+            margin-bottom: 4px;
+        }
+        .control-group input {
+            padding: 8px;
+            border: 1px solid var(--medium-gray);
+            border-radius: 5px;
+            font-size: 14px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        /* --- NEW: Styles for anomaly clearing --- */
+        .anomaly-feed-header {
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 10px;
+        }
+        .anomaly-checkbox {
+            margin-right: 10px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="banner">Predictive Observability Dashboard</div>
+    <div class="dashboard">
+        <div class="control-panel">
+            <div class="container">
+                <h2>Live Status</h2>
+                <div class="status-grid">
+                    <div class="status-item"><p class="status-label"><span id="mode-indicator" class="status-indicator status-off"></span>Mode</p><p class="status-value" id="currentMode">IDLE</p></div>
+                    <div class="status-item"><p class="status-label">Corpus Size</p><p class="status-value" id="logCount">0</p></div>
+                    <div class="status-item"><p class="status-label">Word2Vec</p><p class="status-value" id="modelStatus">Untrained</p></div>
+                    <div class="status-item"><p class="status-label">LSTM Model</p><p class="status-value" id="lstmModelStatus">Untrained</p></div>
+                </div>
+            </div>
+            <div class="container">
+                <h2>Data Collection</h2>
+                <div class="collection-controls">
+                    <input type="number" id="durationInput" value="5" min="1">
+                    <select id="durationUnit">
+                        <option value="minutes">Minutes</option>
+                        <option value="hours">Hours</option>
+                    </select>
+                </div>
+                <button id="startBtn" class="btn-collect">▶️ Start Timed Collection</button>
+                <button id="stopBtn" class="btn-stop">⏹️ Stop Collection Now</button>
+                <p id="countdown" style="text-align:center; font-weight:bold;"></p>
+            </div>
+            <div class="container">
+                <h2>Model Training</h2>
+                <button id="trainBtn" class="btn-train">🧠 Train Word2Vec</button>
+                
+                <h3 style="margin-top: 1.5rem; border-top: 1px solid var(--medium-gray); padding-top: 1rem;">LSTM Parameters</h3>
+                <div class="lstm-controls">
+                    <div class="control-group">
+                        <label for="epochsInput">Epochs</label>
+                        <input type="number" id="epochsInput" value="20" min="1">
+                    </div>
+                    <div class="control-group">
+                        <label for="batchSizeInput">Batch Size</label>
+                        <input type="number" id="batchSizeInput" value="32" min="1">
+                    </div>
+                    <div class="control-group">
+                        <label for="thresholdInput">Threshold (%)</label>
+                        <input type="number" id="thresholdInput" value="95" min="1" max="100">
+                    </div>
+                </div>
+                
+                <button id="trainLstmBtn" class="btn-train" style="margin-top: 10px;">🧠 Train LSTM</button>
+            </div>
+            <div class="container">
+                <h2>Live Monitoring</h2>
+                <button id="startMonitorBtn" class="btn-monitor">📡 Start Monitoring</button>
+                <button id="stopMonitorBtn" class="btn-stop">⏹️ Stop Monitoring</button>
+            </div>
+            <div class="container">
+                <h2>Download & Upload</h2>
+                <h3>Corpus Data</h3>
+                <button id="downloadCorpusBtn" class="btn-save">💾 Download Corpus</button>
+                <div class="io-controls">
+                    <input type="file" id="corpusUploadInput" accept=".json">
+                    <button id="loadCorpusBtn" class="btn-save">📂 Upload</button>
+                </div>
+                <h3 style="margin-top: 1.5rem;">Trained Models</h3>
+                <button id="downloadModelsBtn" class="btn-save">💾 Download Models</button>
+                <div class="io-controls">
+                     <input type="file" id="modelUploadInput" accept=".zip">
+                     <button id="loadModelsBtn" class="btn-save">📂 Upload</button>
+                </div>
+            </div>
+             <div class="container">
+                <h2>Maintenance</h2>
+                <button id="clearBtn" class="btn-stop">🗑️ Clear All Data</button>
+            </div>
+        </div>
+        <div class="output-panel">
+            <div class="tab-nav">
+                <button class="tab-link" data-tab="collection-pane">📝 Live Collection</button>
+                <button class="tab-link active" data-tab="live-feed-pane">📡 Anomaly Feed</button>
+                <button class="tab-link" data-tab="training-report-pane">🧠 Training Reports</button>
+                <button class="tab-link" data-tab="upload-status-pane">📂 Upload Status</button>
+            </div>
+            <div class="tab-content">
+                <div id="collection-pane" class="tab-pane">
+                    <div class="output-box" id="collection-output">
+                        <p class="placeholder-text">When data collection starts, a live feed of incoming logs will appear here.</p>
+                    </div>
+                </div>
+                <div id="live-feed-pane" class="tab-pane active">
+                    <!-- NEW: Header with clear button -->
+                    <div class="anomaly-feed-header">
+                        <button id="clearAnomaliesBtn" class="btn-stop" style="width: auto; flex-shrink: 0;">🗑️ Clear Selected</button>
+                    </div>
+                    <div class="output-box" id="live-feed-output">
+                        <p class="placeholder-text">Welcome! When monitoring starts, the live anomaly feed will appear here.</p>
+                    </div>
+                </div>
+                <div id="training-report-pane" class="tab-pane">
+                     <div class="output-box" id="training-report-output">
+                        <p class="placeholder-text">Reports from Word2Vec and LSTM model training will appear here.</p>
+                    </div>
+                </div>
+                <div id="upload-status-pane" class="tab-pane">
+                    <div class="output-box" id="upload-status-output">
+                        <p class="placeholder-text">Status of corpus and model uploads will appear here.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    let collectionTimerInterval = null;
+
+    async function apiCall(endpoint, method = 'POST', body = null) {
+        const options = { method };
+        if (body) {
+            if (body instanceof FormData) {
+                options.body = body;
+            } else {
+                options.headers = { 'Content-Type': 'application/json' };
+                options.body = JSON.stringify(body);
+            }
+        }
+        try {
+            const response = await fetch(endpoint, options);
+            if (response.ok && response.headers.get("content-disposition")?.includes("attachment")) {
+                return { status: 'download_initiated' };
+            }
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.message || `API Error on ${endpoint}: ${response.statusText}`);
+            }
+            return data;
+        } catch (error) {
+            console.error(`API Call to ${endpoint} failed:`, error);
+            showToast(`Error: ${error.message}`);
+            return { status: 'error', error: error.message };
+        }
+    }
+    
+    function showToast(message) {
+        const toast = document.createElement('div');
+        toast.textContent = message;
+        toast.style.position = 'fixed';
+        toast.style.bottom = '20px';
+        toast.style.left = '50%';
+        toast.style.transform = 'translateX(-50%)';
+        toast.style.backgroundColor = '#333';
+        toast.style.color = 'white';
+        toast.style.padding = '10px 20px';
+        toast.style.borderRadius = '5px';
+        toast.style.zIndex = '1000';
+        document.body.appendChild(toast);
+        setTimeout(() => { document.body.removeChild(toast); }, 3000);
+    }
+
+    function showTab(tabId) {
+        document.querySelectorAll('.tab-link').forEach(button => button.classList.remove('active'));
+        document.querySelector(`.tab-link[data-tab='${tabId}']`).classList.add('active');
+        document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
+        document.getElementById(tabId).classList.add('active');
+    }
+
+    function displayJsonInBox(targetBoxId, jsonData) {
+        const box = document.getElementById(targetBoxId);
+        box.innerHTML = `<pre>${JSON.stringify(jsonData, null, 2)}</pre>`;
+    }
+
+    function startCountdown(endTimeIso) {
+        const countdownEl = document.getElementById('countdown');
+        if (!endTimeIso) { stopCountdown(); return; }
+        const endTime = new Date(endTimeIso).getTime();
+        if (collectionTimerInterval) clearInterval(collectionTimerInterval);
+
+        collectionTimerInterval = setInterval(() => {
+            const distance = endTime - new Date().getTime();
+            if (distance < 0) {
+                stopCountdown();
+                countdownEl.textContent = "Collection Finished";
+                updateDashboard(); 
+                return;
+            }
+            const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+            countdownEl.textContent = `Time Remaining: ${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }, 1000);
+    }
+
+    function stopCountdown() {
+        if (collectionTimerInterval) clearInterval(collectionTimerInterval);
+        collectionTimerInterval = null;
+        document.getElementById('countdown').textContent = "";
+    }
+
+    async function updateDashboard() {
+        const statusData = await apiCall('/status', 'GET');
+        if (!statusData || statusData.status !== 'ok') return;
+
+        let mode = "IDLE";
+        let indicator = document.getElementById('mode-indicator');
+        indicator.className = 'status-indicator status-off';
+        
+        if (statusData.is_collecting) {
+            mode = "COLLECTING";
+            indicator.className = 'status-indicator status-on';
+            if (statusData.collection_end_time && collectionTimerInterval === null) {
+                startCountdown(statusData.collection_end_time);
+            }
+            const recentLogData = await apiCall('/collect/recent', 'GET');
+            const collectionBox = document.getElementById('collection-output');
+            if (recentLogData && recentLogData.recent_logs) {
+                if (recentLogData.recent_logs.length > 0) {
+                    collectionBox.innerHTML = recentLogData.recent_logs.map(log => `<div class="log-line">${log.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>`).join('');
+                } else {
+                    collectionBox.innerHTML = `<p class="placeholder-text">Collection active. Waiting for logs...</p>`;
+                }
+            }
+        } else {
+            stopCountdown();
+        }
+
+        if (statusData.is_monitoring) { 
+            mode = "MONITORING"; 
+            indicator.className = 'status-indicator status-on'; 
+            const anomalyData = await apiCall('/monitoring/results', 'GET');
+            const outputBox = document.getElementById('live-feed-output');
+            
+            const openStates = new Map();
+            outputBox.querySelectorAll('.anomaly-item').forEach(item => {
+                openStates.set(item.id, { open: item.open, checked: item.querySelector('.anomaly-checkbox')?.checked });
+            });
+
+            if (anomalyData && anomalyData.flagged_anomalies && anomalyData.flagged_anomalies.length > 0) {
+                let content = '';
+                anomalyData.flagged_anomalies.forEach((anomaly, index) => {
+                    const sequenceHTML = anomaly.sequence.map(s => s.replace(/</g, "&lt;").replace(/>/g, "&gt;")).join('\n');
+                    const anomalyId = `anomaly-${anomaly.detected_at.replace(/[^a-zA-Z0-9]/g, "")}`;
+                    
+                    const savedState = openStates.get(anomalyId) || { open: false, checked: false };
+
+                    content += `
+                        <details class="anomaly-item" id="${anomalyId}" ${savedState.open ? 'open' : ''}>
+                            <summary>
+                                <input type="checkbox" class="anomaly-checkbox" data-id="${anomaly.detected_at}" ${savedState.checked ? 'checked' : ''} onclick="event.stopPropagation()">
+                                <span class="summary-meta">#${index + 1} | Score: ${anomaly.score.toFixed(4)}</span>
+                                <span class="summary-text">${anomaly.summary.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</span>
+                                <span class="summary-meta">@ ${new Date(anomaly.detected_at).toLocaleTimeString()}</span>
+                            </summary>
+                            <div class="anomaly-details">
+                                <pre>${sequenceHTML}</pre>
+                            </div>
+                        </details>
+                    `;
+                });
+                outputBox.innerHTML = content;
+
+            } else {
+                outputBox.innerHTML = '<p class="placeholder-text">Monitoring... No anomalies flagged yet.</p>';
+            }
+        }
+        
+        document.getElementById('currentMode').textContent = mode;
+        document.getElementById('logCount').textContent = statusData.logs_in_corpus;
+        document.getElementById('modelStatus').textContent = statusData.word2vec_model_status;
+        document.getElementById('lstmModelStatus').textContent = statusData.lstm_model_status;
+    }
+    
+    document.querySelectorAll('.tab-link').forEach(button => {
+        button.addEventListener('click', () => showTab(button.dataset.tab));
+    });
+
+    document.getElementById('startBtn').addEventListener('click', async () => {
+        const durationValue = document.getElementById('durationInput').value;
+        const durationUnit = document.getElementById('durationUnit').value;
+        const duration_seconds = durationUnit === 'minutes' ? parseInt(durationValue, 10) * 60 : parseInt(durationValue, 10) * 3600;
+        
+        document.getElementById('collection-output').innerHTML = `<p class="placeholder-text">Starting collection... Waiting for logs...</p>`;
+        showTab('collection-pane');
+
+        const result = await apiCall('/collect/start', 'POST', { duration_seconds });
+        if (result && result.end_time_iso) {
+            startCountdown(result.end_time_iso);
+        }
+        updateDashboard();
+    });
+    
+    document.getElementById('stopBtn').addEventListener('click', async () => { await apiCall('/collect/stop'); updateDashboard(); });
+    document.getElementById('stopMonitorBtn').addEventListener('click', async () => { await apiCall('/monitoring/stop'); updateDashboard(); });
+    document.getElementById('clearBtn').addEventListener('click', () => { if (confirm('This will clear all in-memory data. Are you sure?')) apiCall('/collect/clear'); });
+
+    document.getElementById('trainBtn').addEventListener('click', async () => {
+        showTab('training-report-pane');
+        displayJsonInBox("training-report-output", { status: "Request sent. Training Word2Vec model..."});
+        const result = await apiCall('/train', 'POST');
+        displayJsonInBox("training-report-output", result);
+    });
+
+    document.getElementById('trainLstmBtn').addEventListener('click', async () => {
+        showTab('training-report-pane');
+        
+        const epochs = document.getElementById('epochsInput').value;
+        const batchSize = document.getElementById('batchSizeInput').value;
+        const thresholdPercentile = document.getElementById('thresholdInput').value;
+        
+        const params = {
+            epochs: parseInt(epochs, 10),
+            batch_size: parseInt(batchSize, 10),
+            threshold_percentile: parseInt(thresholdPercentile, 10)
+        };
+        
+        displayJsonInBox("training-report-output", { status: "Request sent. Training LSTM model with custom parameters...", parameters: params });
+        
+        const result = await apiCall('/train/lstm', 'POST', params);
+        
+        displayJsonInBox("training-report-output", result);
+    });
+
+    document.getElementById('startMonitorBtn').addEventListener('click', async () => {
+        const res = await apiCall('/monitoring/start');
+        if (res.status !== 'error') {
+            document.getElementById('live-feed-output').innerHTML = '<p class="placeholder-text">Monitoring started. Waiting for new logs...</p>';
+            showTab('live-feed-pane');
+            updateDashboard();
+        }
+    });
+
+    document.getElementById('downloadCorpusBtn').addEventListener('click', () => {
+        showToast('Preparing corpus download...');
+        window.location.href = '/corpus/download';
+    });
+    
+    document.getElementById('downloadModelsBtn').addEventListener('click', () => {
+        showToast('Preparing models download...');
+        window.location.href = '/models/download';
+    });
+
+    document.getElementById('loadCorpusBtn').addEventListener('click', async () => {
+        const fileInput = document.getElementById('corpusUploadInput');
+        const file = fileInput.files[0];
+        if (!file) { showToast('Please select a corpus JSON file to upload.'); return; }
+
+        const formData = new FormData();
+        formData.append('corpus_upload_file', file);
+        
+        showTab('upload-status-pane');
+        displayJsonInBox("upload-status-output", { status: `Uploading corpus ${file.name}...` });
+        const result = await apiCall('/corpus/load', 'POST', formData);
+        displayJsonInBox("upload-status-output", result);
+        if (result.status !== 'error') showToast('Corpus uploaded successfully!');
+        updateDashboard();
+        fileInput.value = '';
+    });
+
+    document.getElementById('loadModelsBtn').addEventListener('click', async () => {
+        const fileInput = document.getElementById('modelUploadInput');
+        const file = fileInput.files[0];
+        if (!file) { showToast('Please select a models ZIP file to upload.'); return; }
+        
+        const formData = new FormData();
+        formData.append('model_upload_file', file);
+
+        showTab('upload-status-pane');
+        displayJsonInBox("upload-status-output", { status: `Uploading models ${file.name}...` });
+        const result = await apiCall('/models/load', 'POST', formData);
+        displayJsonInBox("upload-status-output", result);
+        if (result.status !== 'error') showToast('Models uploaded successfully!');
+        updateDashboard();
+        fileInput.value = '';
+    });
+
+    // --- NEW: Event listener for clearing anomalies ---
+    document.getElementById('clearAnomaliesBtn').addEventListener('click', async () => {
+        const idsToClear = [];
+        document.querySelectorAll('.anomaly-checkbox:checked').forEach(checkbox => {
+            idsToClear.push(checkbox.dataset.id);
+        });
+
+        if (idsToClear.length === 0) {
+            showToast("No anomalies selected to clear.");
+            return;
+        }
+
+        const result = await apiCall('/monitoring/clear_anomalies', 'POST', { anomalies_to_clear: idsToClear });
+
+        if (result.status === 'success') {
+            showToast(`Cleared ${result.cleared_count} anomalies.`);
+            updateDashboard(); // Refresh the view
+        }
+    });
+    
+    // --- Initial Load ---
+    setInterval(updateDashboard, 5000);
+    updateDashboard(); // Initial call
+});
+</script>
+</body>
+</html>

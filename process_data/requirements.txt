@@ -1,0 +1,8 @@
+# requirements.txt
+gensim
+flask
+numpy
+waitress
+scikit-learn
+tensorflow
+joblib

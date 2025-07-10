@@ -1,0 +1,49 @@
+# ===============================================================================================
+# This file contains the final, corrected, and complete definitions for the
+# log-processor Deployment and its accompanying Service.
+# This version adds a volume for robust, file-based state management.
+# ===============================================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-processor
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: log-processor
+  template:
+    metadata:
+      labels:
+        app: log-processor
+    spec:
+      containers:
+      - name: processor
+        # Use the latest version tag you are building (e.g., v13)
+        image: log-processor:v1.0.2
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 5000
+        # Mount the state volume into the container at /state
+        volumeMounts:
+        - name: state-volume
+          mountPath: /state
+      # Define the emptyDir volume that will persist for the life of the pod
+      volumes:
+      - name: state-volume
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: log-processor-service
+  namespace: kube-system
+spec:
+  selector:
+    app: log-processor
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 5000

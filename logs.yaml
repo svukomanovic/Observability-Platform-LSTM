@@ -1,0 +1,237 @@
+# --- DEPLOYMENT MANIFEST ---
+# This file contains all the necessary components to run the log processing pipeline.
+# 1. Service: Exposes the Python log processor within the cluster.
+# 2. Deployment: Manages the Python log processor pods.
+# 3. ConfigMap: Contains the configuration for Fluent Bit.
+# 4. DaemonSet: Runs Fluent Bit on every node in the cluster.
+#
+# Apply this entire file to your cluster with:
+# kubectl apply -f <this_file_name>.yaml
+# ---------------------------
+
+# 1. Service for the Python Log Processor
+apiVersion: v1
+kind: Service
+metadata:
+  name: log-processor-service
+  namespace: kube-system
+spec:
+  selector:
+    app: log-processor
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 5000
+---
+# 2. Deployment for the Python Log Processor
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-processor-deployment
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: log-processor
+  template:
+    metadata:
+      labels:
+        app: log-processor
+    spec:
+      containers:
+      # IMPORTANT: Replace 'your-docker-registry/predictive-observability:latest'
+      # with the actual name of the Docker image containing your Python server code.
+      - name: processor
+        image: log-processor:v1.0.2
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 5000
+        # Mount the state volume into the container at /state
+        volumeMounts:
+        - name: state-volume
+          mountPath: /state
+      # Define the emptyDir volume that will persist for the life of the pod
+      volumes:
+      - name: state-volume
+        emptyDir: {}
+---
+# 3. ConfigMap for Fluent Bit
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluent-bit-config
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: fluentbit
+data:
+  # Main configuration file
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush         5
+        Log_Level     warn 
+        Daemon        off
+        Parsers_File  parsers.conf
+        Scripts_File  scripts.lua
+        HTTP_Server   On
+        HTTP_Listen   0.0.0.0
+        HTTP_Port     2020
+
+    # INPUT 1: Tailing container logs from the node
+    [INPUT]
+        Name              tail
+        Tag               kube.container.*
+        Path              /var/log/containers/*.log
+        Parser            docker
+        DB                /fluent-bit/state/flb_kube.db
+        Mem_Buf_Limit     5MB
+        Skip_Long_Lines   On
+        Refresh_Interval  10
+
+    # INPUT 2: Tailing systemd logs from the node
+    [INPUT]
+        Name              systemd
+        Tag               host.*
+        Systemd_Filter    _SYSTEMD_UNIT=kubelet.service
+        Systemd_Filter    _SYSTEMD_UNIT=containerd.service
+        Read_From_Tail    On
+
+    # INPUT 3: Natively watching for Kubernetes Events
+    [INPUT]
+        Name              kubernetes_events
+        Tag               kube.event.*
+
+    # FILTER 1: Enrich container logs with Kubernetes metadata.
+    [FILTER]
+        Name              kubernetes
+        Match             kube.container.*
+        Kube_URL          https://kubernetes.default.svc
+        Kube_CA_File      /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        Kube_Token_File   /var/run/secrets/kubernetes.io/serviceaccount/token
+        Merge_Log         On
+        # By not specifying Merge_Log_Key, the 'log' field is merged at the top level.
+        K8S-Logging.Parser On
+        K8S-Logging.Exclude Off
+
+    # FILTER 2: Restructure the Kubernetes event logs using a Lua script
+    [FILTER]
+        Name              lua
+        Match             kube.event.*
+        script            scripts.lua
+        call              restructure_event
+    
+    # FILTER 3: Exclude logs from our own data pipeline components
+    [FILTER]
+        Name              grep
+        Match             *
+        Exclude           kubernetes['container_name'] fluent-bit
+        Exclude           kubernetes['container_name'] log-processor
+
+    # --- UPDATED: FILTER 4: Exclude common, benign operational messages by content ---
+    [FILTER]
+        Name              grep
+        Match             *
+        # The 'log' key is now at the top level, so we can target it directly.
+        Exclude           log Handling node with IPs
+        Exclude           log handling current node
+        Exclude           log "Successfully synced"
+        Exclude           log WiredTiger message
+
+    # OUTPUT: Forward all REMAINING logs to our Python processor service
+    [OUTPUT]
+        Name          http
+        Match         *
+        Host          log-processor-service.kube-system.svc.cluster.local
+        Port          80
+        URI           /
+        Format        json
+        json_date_key false
+        Header        Content-Type application/json
+
+  # Parser definitions for container logs (Unchanged)
+  parsers.conf: |
+    [PARSER]
+        Name        docker
+        Format      json
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L
+        Time_Keep   On
+
+  # Lua script for restructuring event and metric logs
+  scripts.lua: |
+    function restructure_event(tag, timestamp, record)
+        local new_record = {}
+        -- This creates a 'log_processed' field, which is fine because the grep
+        -- filter for noise specifically targets the 'log' field, not this one.
+        if record.message then
+            new_record["log_processed"] = {
+                log = record.message
+            }
+        else
+            new_record["log_processed"] = {
+                log = "Event with no message field"
+            }
+        end
+        return 1, timestamp, new_record
+    end
+---
+# 4. DaemonSet for Fluent Bit
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: log-collector-daemonset
+  namespace: kube-system
+  labels:
+    app: log-collector
+spec:
+  selector:
+    matchLabels:
+      app: log-collector
+  template:
+    metadata:
+      labels:
+        app: log-collector
+    spec:
+      serviceAccountName: log-collector-sa
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule
+      - operator: Exists
+        effect: NoExecute
+      containers:
+      - name: fluent-bit
+        image: fluent/fluent-bit:3.0
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        args:
+        - -c
+        - /fluent-bit/etc/fluent-bit.conf
+        ports:
+        - containerPort: 2020 # Expose the HTTP server for health checks
+        volumeMounts:
+        - name: fluentbit-config
+          mountPath: /fluent-bit/etc
+        - name: varlog
+          mountPath: /var/log
+          readOnly: true
+        - name: varlibdockercontainers
+          mountPath: /var/lib/docker/containers
+          readOnly: true
+        - name: fluentbit-state
+          mountPath: /fluent-bit/state
+      volumes:
+      - name: fluentbit-config
+        configMap:
+          name: fluent-bit-config
+      - name: varlog
+        hostPath:
+          path: /var/log
+      - name: varlibdockercontainers
+        hostPath:
+          path: /var/lib/docker/containers
+      - name: fluentbit-state
+        emptyDir: {}
